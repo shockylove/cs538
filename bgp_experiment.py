@@ -54,6 +54,10 @@ class BGPRouter(Host):
         print(f'[DEBUG][setup_frr-start] {self.name}: ASN={self.bgp_asn}, router_id={self.bgp_router_id}, peers={peers}')
         info(f'*** Setting up FRR for {self.name} with ASN {self.bgp_asn} and router ID {self.bgp_router_id}\n')
         
+        # 如果你不想每次手动加 chmod
+        self.cmd(f'chown -R frr:frr {self.frr_dir}')
+        self.cmd(f'chmod -R go+rX {self.frr_dir}')  # 允许其他用户读取
+        
         # Stop any existing FRR processes for this router
         self.cmd(f'pkill -f "zebra.*{self.name}"')
         self.cmd(f'pkill -f "bgpd.*{self.name}"')
@@ -216,7 +220,24 @@ log file {self.frr_dir}/log/frr.log informational
         # Verify configuration and BGP status
         info(f'*** Verifying FRR configuration for {self.name}\n')
         self._verify_frr_status()
-    
+        
+        # Write PID to /var/run/mnexec for external access
+        # Write PID to /var/run/mnexec for external access
+        try:
+            os.makedirs('/var/run/mnexec', exist_ok=True)
+            # 获取 zebra/bgpd 的 PID
+            if hasattr(self, 'zebra') and hasattr(self, 'bgpd'):
+                router_pid = self.bgpd.pid  # 或者 zebra.pid，两者通常一致
+            else:
+                router_pid = os.getpid()  # fallback（不推荐）
+
+            with open(f'/var/run/mnexec/{self.name}.pid', 'w') as f:
+                f.write(str(router_pid))
+
+            info(f'*** Wrote PID {router_pid} to /var/run/mnexec/{self.name}.pid\n')
+        except Exception as e:
+            error(f'*** Failed to write PID file for {self.name}: {str(e)}\n')
+            
     def _verify_frr_status(self):
         """Verify FRR daemon status and configuration"""
         # Check if processes are running
@@ -553,6 +574,17 @@ class CustomCLI(CLI):
             self.mn.experiment.recover_bgp_after_link_flap()
         else:
             print("*** Error: Experiment object with recovery method not found.")
+
+    def do_checkpid(self, line):
+        """Check the PID of a node"""
+        if not line:
+            print("Usage: checkpid <node>")
+            return
+        node = self.mn.get(line)
+        if hasattr(node, 'bgpd'):
+            print(f"{line} bgpd PID: {node.bgpd.pid}")
+        if hasattr(node, 'zebra'):
+            print(f"{line} zebra PID: {node.zebra.pid}")
 
     def do_startfrr(self, line):
         """
